@@ -1,0 +1,4 @@
+/lds_vulkan
+/*.spv
+/results/
+/__pycache__/

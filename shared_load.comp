@@ -1,0 +1,68 @@
+#version 450
+#ifndef WIDTH
+#define WIDTH 4
+#endif
+#ifndef STRIDE
+#define STRIDE 4
+#endif
+#ifndef OFFSET
+#define OFFSET 0
+#endif
+#ifndef MODE
+#define MODE 0
+#endif
+layout(local_size_x = 128) in;
+layout(binding = 0, std430) readonly buffer Input { uvec4 data[]; } src;
+layout(binding = 1, std430) writeonly buffer Output { uvec4 data[]; } dst;
+layout(push_constant) uniform Params { uint iterations; } params;
+shared uint tile[256 * STRIDE + OFFSET];
+uvec4 read_record(uint record) {
+    uint base = record * STRIDE + OFFSET;
+    uvec4 v = uvec4(tile[base], 0, 0, 0);
+#if WIDTH >= 2
+    v.y = tile[base + 1];
+#endif
+#if WIDTH >= 3
+    v.z = tile[base + 2];
+#endif
+#if WIDTH >= 4
+    v.w = tile[base + 3];
+#endif
+    return v;
+}
+void main() {
+    uint lane = gl_LocalInvocationIndex;
+    for (uint record = lane; record < 256; record += 128) {
+        uvec4 v = src.data[record];
+        uint base = record * STRIDE + OFFSET;
+        tile[base] = v.x;
+#if WIDTH >= 2
+        tile[base + 1] = v.y;
+#endif
+#if WIDTH >= 3
+        tile[base + 2] = v.z;
+#endif
+#if WIDTH >= 4
+        tile[base + 3] = v.w;
+#endif
+    }
+    barrier();
+#if MODE == 0
+    uint index = lane + 1;
+    for (uint i = 0; i < params.iterations; ++i) {
+        uvec4 v = read_record(index);
+        index = (v.x ^ v.y ^ v.z ^ v.w) & 255;
+    }
+    uvec4 result = uvec4(index, 0, 0, 0);
+#else
+    uvec4 sums[8];
+    for (uint j = 0; j < 8; ++j) sums[j] = uvec4(0);
+    for (uint i = 0; i < params.iterations; ++i) {
+        uint base = lane + 1 + 17 * i;
+        for (uint j = 0; j < 8; ++j) sums[j] += read_record((base + 19 * j) & 255);
+    }
+    uvec4 result = uvec4(0);
+    for (uint j = 0; j < 8; ++j) result += sums[j];
+#endif
+    dst.data[gl_WorkGroupID.x * 128 + lane] = result;
+}
